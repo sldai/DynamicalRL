@@ -14,6 +14,12 @@ from tianshou.data import Collector, ReplayBuffer
 from tianshou.utils.net.common import Net
 from tianshou.utils.net.continuous import ActorProb, Critic
 
+from net import Actor, Critic
+
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) +
+                "/../DynamicalEnvs/")
+from quadcopter import QuadcopterEnv
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -47,35 +53,15 @@ def get_args():
     args = parser.parse_known_args()[0]
     return args
 
+def gym_make():
+    return QuadcopterEnv()
 
-
-def test_ppo(args=get_args()):
-    torch.set_num_threads(1)  # we just need only one thread for NN
-    env = gym.make(args.task)
-    args.state_shape = env.observation_space.shape or env.observation_space.n
-    args.action_shape = env.action_space.shape or env.action_space.n
-    args.action_range = [env.action_shape.low[0], env.action_space.high[0]]
-    # you can also use tianshou.env.SubprocVectorEnv
-    # train_envs = gym.make(args.task)
-    train_envs = VectorEnv(
-        [lambda: gym.make(args.task) for _ in range(args.training_num)])
-    # test_envs = gym.make(args.task)
-    test_envs = VectorEnv(
-        [lambda: gym.make(args.task) for _ in range(args.test_num)])
-    # seed
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    train_envs.seed(args.seed)
-    test_envs.seed(args.seed)
-    # model
-    net = Net(args.layer_num, args.state_shape, device=args.device)
-    actor = ActorProb(
-        net, args.action_shape,
-        args.action_shape, args.device
+def init_policy(args, env):
+    actor = Actor(
+        layer=None, state_shape = args.state_shape, action_shape = args.action_shape,
+        action_range = args.action_range, device = args.device
     ).to(args.device)
-    critic = Critic(Net(
-        args.layer_num, args.state_shape, device=args.device
-    ), device=args.device).to(args.device)
+    critic = Critic(layer = None, state_shape = args.state_shape, action_shape=args.action_shape, device = args.device).to(args.device)
     # orthogonal initialization
     for m in list(actor.modules()) + list(critic.modules()):
         if isinstance(m, torch.nn.Linear):
@@ -97,6 +83,29 @@ def test_ppo(args=get_args()):
         # action_range=[env.action_space.low[0], env.action_space.high[0]],)
         # if clip the action, ppo would not converge :)
         gae_lambda=args.gae_lambda)
+    return policy
+
+
+def test_ppo(args=get_args()):
+    torch.set_num_threads(1)  # we just need only one thread for NN
+    env = gym_make()
+    args.state_shape = env.observation_space.shape or env.observation_space.n
+    args.action_shape = env.action_space.shape or env.action_space.n
+    args.action_range = [env.action_shape.low[0], env.action_space.high[0]]
+    # you can also use tianshou.env.SubprocVectorEnv
+    # train_envs = gym_make()
+    train_envs = VectorEnv(
+        [lambda: gym_make() for _ in range(args.training_num)])
+    # test_envs = gym_make()
+    test_envs = VectorEnv(
+        [lambda: gym_make() for _ in range(args.test_num)])
+    # seed
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    train_envs.seed(args.seed)
+    test_envs.seed(args.seed)
+    # model
+    policy = init_policy(args, env)
     # collector
     train_collector = Collector(
         policy, train_envs, ReplayBuffer(args.buffer_size))
@@ -119,7 +128,7 @@ def test_ppo(args=get_args()):
     if __name__ == '__main__':
         pprint.pprint(result)
         # Let's watch its performance!
-        env = gym.make(args.task)
+        env = gym_make()
         collector = Collector(policy, env)
         result = collector.collect(n_episode=1, render=args.render)
         print(f'Final reward: {result["rew"]}, length: {result["len"]}')
