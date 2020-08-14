@@ -10,8 +10,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) +
                 "/../DynamicalEnvs/")
-from quadcopter import QuadcopterEnv, mass, g, Ix, Iy, Iz
-
+from dubin import DubinEnv
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -24,101 +23,22 @@ def get_args():
     parser.add_argument('--batch_size', type=int, default=500)
     return parser.parse_known_args()[0]
 
-
-def LQR_discrete_gain(dt):
-    A = np.array([
-        [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, g, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, -g, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    ])
-
-    A = np.eye(12) + A*dt
-
-    B = np.array([
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [1/mass, 0, 0, 0],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [0, 1/Ix, 0, 0],
-        [0, 0, 1/Iy, 0],
-        [0, 0, 0, 1/Iz],
-    ])
-
-    B = B*dt
-
-    # Q = np.eye(12)*1.0
-    Q = np.diag([1, 1.0, 3.0, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
-    R = np.eye(4)*0.001
-
-    P = solve_discrete_are(A, B, Q, R)
-    K = np.linalg.inv(R + B.T @ P @ B) @ (B.T @ P @ A)
-    return K
-
-
-def LQR_control(env):
-    """Collect a trajectory using LQR.
-    Args:
-        env: the gym environment
-
-    Returns:
-        states: states during the trajectory
-        acts: actions during the trajectory
-    """
-    K = LQR_discrete_gain(env.dt)
-    x_e, u_e = env.goal_, np.array([mass*g, 0, 0, 0])  # equalibrium
-
-    states = []
-    acts = []
-
-    done = False
-    while not done:
-        obs = env._obs()
-        states.append(obs)
-        u = u_e - K @ (env.state_-x_e)
-        act = env.normalize_u(u)
-        acts.append(act)
-        obs, reward, done, info = env.step(act)   
-        
-    return states, acts
-
-
-def collect_data(args=get_args()):
-    env = QuadcopterEnv()
-
-    states, acts = [], []
-    for i in range(1, 1+args.traj_num):
-        env.reset()
-        _states, _acts = LQR_control(env)
-        states += _states
-        acts += _acts
-        if i % 100 == 0:
-            print(f'Generate {i} trajectories')
-
-    state_act_pair = {'states': np.array(states), 'acts': np.array(acts)}
-    pickle.dump(state_act_pair, open('lqr_quadcopter', 'wb'))
-
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 
 def train(args=get_args()):
-    trajs = pickle.load(open('lqr_quadcopter', 'rb'))
-    states, acts = trajs['states'], trajs['acts']
-    print(np.max(abs(states[:,0])), np.max(abs(states[:,1])), np.max(abs(states[:,2])), np.max(abs(acts[:,0])), np.max(abs(acts[:,1])), np.max(abs(acts[:,2])), np.max(abs(acts[:,3])))
-    env = QuadcopterEnv()
+    trajs = pickle.load(open('dubin_training_data.pkl', 'rb'))
+    states, acts = trajs['obs'], trajs['action']
+    
+    env = DubinEnv()
+    # states[:,0] = states[:,0]/20
+    # states[:,1] = states[:,1]/20
+    # states[:,2] = states[:,2]/np.pi
+    # # states[:,3] = states[:,3]/env.state_bounds[3,1]
+    # states[:,4] = states[:,4]/np.pi
+    acts = np.clip(env.normalize_u(acts), -1, 1)
+    print(np.max(abs(states[:,0])), np.max(abs(states[:,1])), np.max(abs(states[:,2])), np.max(abs(acts[:,0])), np.max(abs(acts[:,1])))
+    print(states[-1], acts[-1])
     assert len(states) == len(acts), 'X, y sizes mismatch'
     print(len(states))
     # shuffle
@@ -130,7 +50,7 @@ def train(args=get_args()):
     acts = torch.tensor(
         acts[indices], device=args.device, dtype=torch.float)
 
-    model = Actor(None, env.observation_space.shape, env.action_space.shape, [-1, 1], args.device).to(args.device)
+    model = Actor(None, env.observation_space['dynamics'].shape, env.action_space.shape, [-1, 1], args.device).to(args.device)
 
     loss = nn.MSELoss()
     optimizer = torch.optim.Adagrad(model.parameters())
@@ -177,17 +97,24 @@ def train(args=get_args()):
     writer.close()
 
 def test(args=get_args()):
-    env = QuadcopterEnv()
-    model = Actor(None, env.observation_space.shape, env.action_space.shape, [-1, 1], args.device).to(args.device)
+    env = DubinEnv()
+    env.set_obs([])
+    model = Actor(None, env.observation_space['dynamics'].shape, env.action_space.shape, [-1, 1], args.device).to(args.device)
     args.model_path = os.path.join(args.logdir, 'lqr')
     model.load_state_dict(torch.load(os.path.join(
                     args.model_path, 'policy.pth'), map_location=args.device))
     for i in range(10):
-        obs = env.reset()
+        env.reset()
+        env.state[:2] -= env.goal[:2]
+        env.goal[:2] -= env.goal[:2]
+        obs = env._obs()
         env.render()
         done = False
         while not done:
-            act = model(obs.reshape((1,-1)))[0].detach().cpu().numpy()[0]
+            normed_obs = obs['dynamics'].reshape((1,-1))
+            # /np.array([20,20,np.pi,1,np.pi])
+
+            act = model(normed_obs)[0].detach().cpu().numpy()[0]
             obs, reward, done, info = env.step(act)
             env.render()
 
