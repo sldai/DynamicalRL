@@ -98,15 +98,15 @@ def train(args=get_args()):
 
 def test(args=get_args()):
     env = DubinEnv()
-    env.set_obs([])
+    # env.set_obs([])
     model = Actor(None, env.observation_space['dynamics'].shape, env.action_space.shape, [-1, 1], args.device).to(args.device)
     args.model_path = os.path.join(args.logdir, 'lqr')
     model.load_state_dict(torch.load(os.path.join(
                     args.model_path, 'policy.pth'), map_location=args.device))
     for i in range(10):
         env.reset()
-        env.state[:2] -= env.goal[:2]
-        env.goal[:2] -= env.goal[:2]
+        # env.state[:2] -= env.goal[:2]
+        # env.goal[:2] -= env.goal[:2]
         obs = env._obs()
         env.render()
         done = False
